@@ -1,0 +1,5 @@
+[pome]
+# Replace with the source path of your repository (e.g. github.com/alice/httpbin).
+name = "github.com/your-name/httpbin"
+version = "0.1.0"
+emela = "0.25.0"

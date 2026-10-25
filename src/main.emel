@@ -1,0 +1,23 @@
+import Std.Console.{Console, SystemConsole}
+import Std.Platform.{Platform}
+import Std.Http.{serve}
+import Std.Http.Request.{Request, Get}
+import Std.Http.Response.{Response}
+
+@entry(Http.serve)
+pub fn app(request: Request) -> Response {
+  with Platform {
+    (use Console).print_line("#{request.method} #{Request.path(request)}")
+    route(request)
+  }
+}
+
+fn route(request: Request) -> Response {
+  (request.method, Request.segments(request)) match {
+    _ -> probrem(404, "Not Found")
+  }
+}
+
+fn probrem(status: Int, message: String) -> Response {
+  Response.new(status, message)
+}
