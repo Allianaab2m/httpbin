@@ -1,8 +1,20 @@
-import Std.Console.{Console, SystemConsole}
-import Std.Platform.{Platform}
-import Std.Http.{serve}
-import Std.Http.Request.{Request, Get}
+# A small httpbin for trying Emela Deploy: each route checks one thing of the platform.
+
+import Std.Http
+import Std.Http.Request.{Request, Method, Get, Head, Post, Put, Patch, Delete, Options}
 import Std.Http.Response.{Response}
+import Std.Platform.{Platform}
+import Std.Console.{Console}
+import Std.Clock.{Clock}
+import Std.Env.{Env}
+import Std.Random.{Random}
+import Std.Instant
+import Std.Map.{Map}
+import Dynamic.{Dynamic, Text, Items}
+import Dynamic.Number
+import Json
+
+const MAX_DELAY_MS = 10000
 
 @entry(Http.serve)
 pub fn app(request: Request) -> Response {
@@ -12,12 +24,151 @@ pub fn app(request: Request) -> Response {
   }
 }
 
-fn route(request: Request) -> Response {
+## The routes, without the platform: tests give it their own handlers.
+pub fn route(request: Request) -> Response use { Clock, Env, Random } {
   (request.method, Request.segments(request)) match {
-    _ -> probrem(404, "Not Found")
+    (Get, [])               -> index()
+    (Get, ["headers"])      -> json(200, object([("headers", headers(request))]))
+    (_, ["anything", ..])   -> anything(request)
+    (Get, ["status", code]) -> status(code)
+    (Get, ["delay", ms])    -> delay(ms)
+    (Get, ["uuid"])         -> json(200, object([("uuid", Text(uuid()))]))
+    (Get, ["dice"])         -> dice(Request.query(request))
+    (Get, ["secret"])       -> json(200, object([("set", Dynamic.Bool(is_set("SECRET")))]))
+    _                       -> problem(404, "not found")
   }
 }
 
-fn probrem(status: Int, message: String) -> Response {
-  Response.new(status, message)
+## The message from the environment, to see a change of the variables arrive.
+fn index() -> Response use { Clock, Env } {
+  message = (use Env).get("MESSAGE") |> Option.or("hello from Emela Deploy")
+  now = Instant.to_string((use Clock).now())
+  json(200, object([("message", Text(message)), ("now", Text(now))]))
+}
+
+fn anything(request: Request) -> Response {
+  query = Request.query(request) |> List.map(fn((name, value)) { Items([Text(name), Text(value)]) })
+  json(
+    200,
+    object(
+      [
+        ("method", Text(method_name(request.method))),
+        ("path", Text(Request.path(request))),
+        ("query", Items(query)),
+        ("headers", headers(request)),
+        ("body", Text(request.body)),
+      ],
+    ),
+  )
+}
+
+fn method_name(method: Method) -> String {
+  method match {
+    Get     -> "GET"
+    Head    -> "HEAD"
+    Post    -> "POST"
+    Put     -> "PUT"
+    Patch   -> "PATCH"
+    Delete  -> "DELETE"
+    Options -> "OPTIONS"
+  }
+}
+
+fn headers(request: Request) -> Dynamic {
+  request.headers |> List.map(fn((name, value)) { (name, Text(value)) }) |> object()
+}
+
+## A status from 200 to 599. 204, 205 and 304 cannot have a body.
+fn status(text: String) -> Response {
+  code = Int.parse(text) escape { ParseError(..) -> 0 }
+  if code < 200 || code > 599 {
+    problem(400, "status must be from 200 to 599")
+  } else if code == 204 || code == 205 || code == 304 {
+    Response.new(code, "")
+  } else {
+    json(code, object([("status", int(code))]))
+  }
+}
+
+## Answers after `ms`: a deploy while this waits shows whether the old worker finishes it.
+fn delay(text: String) -> Response use { Clock } {
+  ms = Int.parse(text) escape { ParseError(..) -> -1 }
+  if ms < 0 || ms > MAX_DELAY_MS {
+    problem(400, "delay must be from 0 to #{MAX_DELAY_MS} ms")
+  } else {
+    (use Clock).sleep(ms)
+    json(200, object([("delayed_ms", int(ms))]))
+  }
+}
+
+## A version 4 UUID: 122 random bits.
+fn uuid() -> String use { Random } {
+  random = use Random
+  a = random.int()
+  # The version nibble is 4, and the variant bits are 10. A literal cannot set the sign bit of
+  # an Int, so the masks are made.
+  b = random.int() |> Int.bit_and(Int.bit_not(0xf000)) |> Int.bit_or(0x4000)
+  c = random.int() |> Int.bit_and(0x3fffffff) |> Int.bit_or(Int.shift_left(1, 31))
+  d = random.int()
+  digits = String.chars("#{hex(a)}#{hex(b)}#{hex(c)}#{hex(d)}")
+  [
+    List.take(digits, 8),
+    List.take(List.drop(digits, 8), 4),
+    List.take(List.drop(digits, 12), 4),
+    List.take(List.drop(digits, 16), 4),
+    List.drop(digits, 20),
+  ]
+    |> List.map(String.concat)
+    |> String.join("-")
+}
+
+fn hex(n: Int) -> String {
+  List.range(0, 8)
+    |> List.map(fn(i) {
+      digit = Int.shift_right_unsigned(n, 28 - 4 * i) |> Int.bit_and(15)
+      String.chars("0123456789abcdef") |> List.get(digit) |> Option.or("0")
+    })
+    |> String.concat()
+}
+
+## `?count=2&sides=6`: up to 100 dice of 2 to 1000 sides.
+fn dice(query: List[(String, String)]) -> Response use { Random } {
+  param = fn(name, default) {
+    List.find(query, fn((key, _)) { key == name })
+      |> Option.map(fn((_, value)) { Int.parse(value) escape { ParseError(..) -> -1 } })
+      |> Option.or(default)
+  }
+  count = param("count", 1)
+  sides = param("sides", 6)
+  if count < 1 || count > 100 || sides < 2 || sides > 1000 {
+    problem(400, "count must be from 1 to 100, and sides from 2 to 1000")
+  } else {
+    random = use Random
+    rolls = List.range(0, count)
+      |> List.map(fn(_) { Int.bit_and(random.int(), 0x7fffffff) % sides + 1 })
+    total = List.fold(rolls, 0, fn(sum, roll) { sum + roll })
+    json(200, object([("rolls", Items(List.map(rolls, int))), ("total", int(total))]))
+  }
+}
+
+## Whether a variable is set, without its value: a secret stays a secret.
+fn is_set(name: String) -> Bool use { Env } {
+  (use Env).get(name) |> Option.is_some()
+}
+
+fn object(fields: List[(String, Dynamic)]) -> Dynamic {
+  Dynamic.object(fields)
+}
+
+fn int(n: Int) -> Dynamic {
+  Dynamic.Number(Number.from_int(n))
+}
+
+fn json(status: Int, value: Dynamic) -> Response {
+  Response.new(status, Json.to_string(value))
+    |> Response.add_header("content-type", "application/json")
+}
+
+fn problem(status: Int, message: String) -> Response {
+  json(status, object([("error", Text(message))]))
 }

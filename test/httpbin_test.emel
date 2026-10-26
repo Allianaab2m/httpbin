@@ -1,0 +1,77 @@
+import Std.Clock.{TestClock}
+import Std.Env.{Env}
+import Std.Instant.{Instant}
+import Std.Random.{SystemRandom}
+import Std.State.{State}
+import Std.Http.Request.{Request, Get, Post}
+import Std.Http.Response.{Response}
+import Main
+
+handler Variables: Env {
+  fn get(name) {
+    name match {
+      "MESSAGE" -> Some("hi")
+      "SECRET"  -> Some("s3cret")
+      _         -> None
+    }
+  }
+}
+
+## `route` with a virtual clock, fixed variables and real random numbers.
+fn call(request: Request) -> Response {
+  (response, _) = State.run(Instant.from_unix_milliseconds(0), fn() {
+    with TestClock, Variables, SystemRandom { Main.route(request) }
+  })
+  response
+}
+
+fn get(path: String) -> Response {
+  call(Request.new(Get, "http://localhost#{path}"))
+}
+
+@test
+fn says_the_message_and_the_time() {
+  assert get("/").body == "{\"message\":\"hi\",\"now\":\"1970-01-01T00:00:00.000Z\"}"
+}
+
+@test
+fn echoes_anything() {
+  request = Request(body: "hello", ..Request.new(Post, "http://localhost/anything/a?x=%E3%81%82"))
+  assert call(request).body
+    == "{\"body\":\"hello\",\"headers\":{},\"method\":\"POST\",\"path\":\"/anything/a\",\"query\":[[\"x\",\"あ\"]]}"
+}
+
+@test
+fn answers_the_status_asked_for() {
+  assert get("/status/418").status == 418
+  assert (get("/status/204").status, get("/status/204").body) == (204, "")
+  assert get("/status/99").status == 400
+  assert get("/status/x").status == 400
+}
+
+@test
+fn waits_before_answering() {
+  assert get("/delay/1500").body == "{\"delayed_ms\":1500}"
+  assert get("/delay/10001").status == 400
+}
+
+@test
+fn rolls_dice_within_the_sides() {
+  response = get("/dice?count=100&sides=6")
+  assert response.status == 200
+  assert get("/dice?count=0").status == 400
+  assert get("/dice?sides=x").status == 400
+}
+
+@test
+fn makes_version_4_uuids() {
+  uuid = get("/uuid").body
+  assert String.length(uuid) == String.length("{\"uuid\":\"00000000-0000-4000-8000-000000000000\"}")
+  assert (String.chars(uuid) |> List.drop(23) |> List.head()) == Some("4")
+}
+
+@test
+fn does_not_tell_the_secret() {
+  assert get("/secret").body == "{\"set\":true}"
+  assert get("/nope").status == 404
+}

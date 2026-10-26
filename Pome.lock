@@ -1,2 +1,16 @@
 # Written by `emela pome`. Do not edit.
 version = 1
+
+[[pome]]
+path = "github.com/emela-lang/x/dynamic"
+version = "v0.2.0"
+commit = "0dd9139938130ddb61df45eb63d60141bd2c897a"
+hash = "h1:TO0PGqWyyvgwKeZFW819xGWBSWl76teWg+LE3QxeaRw="
+manifest = "h1:Ts+AmzEx45lz5/Pwech7NDST0AQirUhxz4BWMfBj2xo="
+
+[[pome]]
+path = "github.com/emela-lang/x/json"
+version = "v0.1.0"
+commit = "25771035f821e2e442ca195da77988f0ca574f0a"
+hash = "h1:dc7vVAGLToD+GHYu5AXlxi86iCpJ5yiDEMVs86af4s8="
+manifest = "h1:LW8XG5vzkvvFHF7gfWpQpiX0N/X7mgmeIuz3MDWLBtE="
